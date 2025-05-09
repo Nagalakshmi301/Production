@@ -5,6 +5,10 @@ env:
     AWS_REGION: eu-north-1
     FRONTEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend
     BACKEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend
+    EC2_USER: ubuntu
+    EC2_IP: your.ec2.public.ip
+    SSH_KEY_PATH: /root/.ssh/ec2-key.pem
+    SECRET_NAME: ec2/ssh/private-key
 
 phases:
   pre_build:
@@ -13,6 +17,10 @@ phases:
       - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $FRONTEND_REPO
       - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $BACKEND_REPO
       - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - echo Retrieving EC2 private key from Secrets Manager...
+      - mkdir -p /root/.ssh
+      - aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text > $SSH_KEY_PATH
+      - chmod 400 $SSH_KEY_PATH
 
   build:
     commands:
@@ -29,6 +37,24 @@ phases:
       - docker push $BACKEND_REPO:$IMAGE_TAG
       - echo Writing image definitions file...
       - printf '[{"name":"frontend","imageUri":"%s"},{"name":"backend","imageUri":"%s"}]' $FRONTEND_REPO:$IMAGE_TAG $BACKEND_REPO:$IMAGE_TAG > imagedefinitions.json
+
+  deploy:
+    commands:
+      - echo Deploying to EC2 instance $EC2_IP...
+      - |
+        ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH $EC2_USER@$EC2_IP << EOF
+          echo Logging in to ECR on EC2...
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $FRONTEND_REPO
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $BACKEND_REPO
+          echo Pulling updated images...
+          docker pull $FRONTEND_REPO:$IMAGE_TAG
+          docker pull $BACKEND_REPO:$IMAGE_TAG
+          echo Restarting containers...
+          docker rm -f frontend || true
+          docker rm -f backend || true
+          docker run -d -p 8080:8080 --name frontend $FRONTEND_REPO:$IMAGE_TAG
+          docker run -d -p 5000:5000 --name backend $BACKEND_REPO:$IMAGE_TAG
+        EOF
 
 artifacts:
   files:
