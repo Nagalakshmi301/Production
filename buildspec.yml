@@ -3,9 +3,8 @@ version: 0.2
 env:
   variables:
     AWS_REGION: eu-north-1
-    FRONTEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/frontend
-    BACKEND_REPO:  890742562729.dkr.ecr.eu-north-1.amazonaws.com/backend
-
+    FRONTEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend
+    BACKEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend
 
 phases:
   pre_build:
