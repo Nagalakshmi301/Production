@@ -6,9 +6,9 @@ env:
     FRONTEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend
     BACKEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend
     EC2_USER: ubuntu
-    EC2_IP: 13.60.239.64
-    SSH_KEY_PATH: /root/.ssh/ec2-key.pem
-    SECRET_NAME: ec2/ssh/private-key
+    EC2_IP: 13.60.239.64  # Public IP of your EC2 instance
+    SSH_KEY_PATH: /root/.ssh/ec2-key.pem  # Path to store the private key
+    SECRET_NAME: ec2/ssh/private-key  # The Secret Name in AWS Secrets Manager
 
 phases:
   pre_build:
@@ -37,8 +37,14 @@ phases:
       - docker push $BACKEND_REPO:$IMAGE_TAG
       - echo Writing image definitions file...
       - printf '[{"name":"frontend","imageUri":"%s"},{"name":"backend","imageUri":"%s"}]' $FRONTEND_REPO:$IMAGE_TAG $BACKEND_REPO:$IMAGE_TAG > imagedefinitions.json
+      - echo Testing SSH connectivity to EC2 instance $EC2_IP...
+      - |
+        # Test SSH connection
+        ssh -v -o StrictHostKeyChecking=no -i $SSH_KEY_PATH $EC2_USER@$EC2_IP "echo 'SSH connection successful'"
+      
       - echo Deploying to EC2 instance $EC2_IP...
       - |
+        # Deploy the Docker containers on EC2
         ssh -v -o StrictHostKeyChecking=no -i $SSH_KEY_PATH $EC2_USER@$EC2_IP << EOF
           echo Logging in to ECR on EC2...
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $FRONTEND_REPO
