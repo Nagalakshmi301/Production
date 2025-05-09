@@ -6,7 +6,7 @@ env:
     FRONTEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend
     BACKEND_REPO: 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend
     EC2_USER: ubuntu
-    EC2_IP: your.ec2.public.ip
+    EC2_IP: 13.60.239.64
     SSH_KEY_PATH: /root/.ssh/ec2-key.pem
     SECRET_NAME: ec2/ssh/private-key
 
