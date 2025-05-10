@@ -26,6 +26,10 @@ phases:
       - aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text | jq -r '.["private-key"]' > $SSH_KEY_PATH
       - chmod 400 $SSH_KEY_PATH
 
+      # Check if the SSH key file exists
+      - echo Checking if SSH key file exists...
+      - if [ -f $SSH_KEY_PATH ]; then echo "SSH key exists."; else echo "SSH key missing!" && exit 1; fi
+
   build:
     commands:
       - echo Building frontend image...
