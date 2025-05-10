@@ -18,33 +18,24 @@ phases:
       - echo "Image tag is $IMAGE_TAG"
       - echo Installing jq...
       - yum install -y jq
-      
-      # Improved SSH key handling for single-line key format
       - echo "Setting up SSH key directory..."
       - mkdir -p /root/.ssh
       - echo "Retrieving SSH key from Secrets Manager..."
       - aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text > /tmp/raw_secret.json
-      
-      # Extract and format the key with proper line breaks
-      - echo "Formatting SSH key..."
+      - echo "Extracting private key..."
       - cat /tmp/raw_secret.json | jq -r '.["private-key"]' > /tmp/one_line_key.txt
-      
-      # Process the key to add appropriate line breaks
-      - |
-        echo "-----BEGIN RSA PRIVATE KEY-----" > $SSH_KEY_PATH
-        cat /tmp/one_line_key.txt | grep -v "BEGIN RSA PRIVATE KEY" | grep -v "END RSA PRIVATE KEY" | sed 's/-----BEGIN RSA PRIVATE KEY----- //g' | sed 's/ -----END RSA PRIVATE KEY-----//g' | fold -w 64 >> $SSH_KEY_PATH
-        echo "-----END RSA PRIVATE KEY-----" >> $SSH_KEY_PATH
-      
-      # Set proper permissions
-      - chmod 400 $SSH_KEY_PATH
-      
-      # Verify the key format
-      - echo "Verifying key format:"
-      - head -2 $SSH_KEY_PATH
+      - echo "Formatting SSH key..."
+      - echo "-----BEGIN RSA PRIVATE KEY-----" > $SSH_KEY_PATH
+      - cat /tmp/one_line_key.txt | sed 's/-----BEGIN RSA PRIVATE KEY-----//g' | sed 's/-----END RSA PRIVATE KEY-----//g' | tr -d ' ' | fold -w 64 >> $SSH_KEY_PATH
+      - echo "-----END RSA PRIVATE KEY-----" >> $SSH_KEY_PATH
+      - echo "Verifying key content..."
+      - head -n 2 $SSH_KEY_PATH
       - echo "..."
-      - tail -2 $SSH_KEY_PATH
-      - echo "Key file size:"
-      - stat --format="%s" $SSH_KEY_PATH
+      - tail -n 2 $SSH_KEY_PATH
+      - echo "Setting key permissions..."
+      - chmod 400 $SSH_KEY_PATH
+      - echo "Testing key validity..."
+      - ssh-keygen -y -P "" -f $SSH_KEY_PATH > /dev/null || { echo "Invalid private key format"; exit 1; }
   build:
     commands:
       - echo Building frontend image...
@@ -59,8 +50,6 @@ phases:
       - docker push $BACKEND_REPO:$IMAGE_TAG
       - echo Writing imagedefinitions.json...
       - printf '[{"name":"frontend","imageUri":"%s"},{"name":"backend","imageUri":"%s"}]' $FRONTEND_REPO:$IMAGE_TAG $BACKEND_REPO:$IMAGE_TAG > imagedefinitions.json
-      
-      # Create a deployment script with expanded variables
       - echo "Creating deployment script..."
       - |
         cat > deploy.sh << EOF
@@ -68,26 +57,19 @@ phases:
         echo "Running deployment on EC2 for image tag: ${IMAGE_TAG}"
         echo "Logging in to ECR on EC2..."
         aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 890742562729.dkr.ecr.eu-north-1.amazonaws.com
-        
         echo "Pulling latest images..."
         docker pull 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend:${IMAGE_TAG}
         docker pull 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend:${IMAGE_TAG}
-        
         echo "Stopping and removing old containers..."
         docker rm -f frontend || true
         docker rm -f backend || true
-        
         echo "Starting new containers..."
         docker run -d -p 8080:8080 --name frontend 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend:${IMAGE_TAG}
         docker run -d -p 5000:5000 --name backend 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend:${IMAGE_TAG}
         EOF
       - chmod +x deploy.sh
-      
-      # Try SSH with explicitly specifying the key file
       - echo "Testing SSH connection..."
       - ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=$SSH_KEY_PATH $EC2_USER@$EC2_IP "echo SSH connection successful"
-      
-      # Only proceed with deployment if SSH test succeeded
       - echo "Copying deployment script to EC2..."
       - scp -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=$SSH_KEY_PATH deploy.sh $EC2_USER@$EC2_IP:/home/$EC2_USER/deploy.sh
       - echo "Running deployment script on EC2..."
