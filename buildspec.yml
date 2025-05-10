@@ -18,15 +18,31 @@ phases:
       - echo "Image tag is $IMAGE_TAG"
       - echo Installing jq...
       - yum install -y jq
-      - echo Retrieving SSH key from Secrets Manager...
+      
+      # Improved SSH key handling for single-line key format
+      - echo "Setting up SSH key directory..."
       - mkdir -p /root/.ssh
-      # Make sure to get the private key correctly and format it properly
-      - aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text > key.json
-      - cat key.json | jq -r '.["private-key"]' > $SSH_KEY_PATH
+      - echo "Retrieving SSH key from Secrets Manager..."
+      - aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text > /tmp/raw_secret.json
+      
+      # Extract and format the key with proper line breaks
+      - echo "Formatting SSH key..."
+      - cat /tmp/raw_secret.json | jq -r '.["private-key"]' > /tmp/one_line_key.txt
+      
+      # Process the key to add appropriate line breaks
+      - |
+        echo "-----BEGIN RSA PRIVATE KEY-----" > $SSH_KEY_PATH
+        cat /tmp/one_line_key.txt | grep -v "BEGIN RSA PRIVATE KEY" | grep -v "END RSA PRIVATE KEY" | sed 's/-----BEGIN RSA PRIVATE KEY----- //g' | sed 's/ -----END RSA PRIVATE KEY-----//g' | fold -w 64 >> $SSH_KEY_PATH
+        echo "-----END RSA PRIVATE KEY-----" >> $SSH_KEY_PATH
+      
+      # Set proper permissions
       - chmod 400 $SSH_KEY_PATH
-      # Check SSH key file content
-      - echo "Checking SSH key content (first line only):"
-      - head -n 1 $SSH_KEY_PATH
+      
+      # Verify the key format
+      - echo "Verifying key format:"
+      - head -2 $SSH_KEY_PATH
+      - echo "..."
+      - tail -2 $SSH_KEY_PATH
       - echo "Key file size:"
       - stat --format="%s" $SSH_KEY_PATH
   build:
@@ -43,33 +59,39 @@ phases:
       - docker push $BACKEND_REPO:$IMAGE_TAG
       - echo Writing imagedefinitions.json...
       - printf '[{"name":"frontend","imageUri":"%s"},{"name":"backend","imageUri":"%s"}]' $FRONTEND_REPO:$IMAGE_TAG $BACKEND_REPO:$IMAGE_TAG > imagedefinitions.json
-      - echo "Deploying via SSH to EC2... Image tag is $IMAGE_TAG"
-      # Create a deployment script with variables expanded before sending to EC2
+      
+      # Create a deployment script with expanded variables
+      - echo "Creating deployment script..."
       - |
         cat > deploy.sh << EOF
         #!/bin/bash
-        echo Logging in to ECR on EC2...
+        echo "Running deployment on EC2 for image tag: ${IMAGE_TAG}"
+        echo "Logging in to ECR on EC2..."
         aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 890742562729.dkr.ecr.eu-north-1.amazonaws.com
         
-        echo Pulling latest images...
+        echo "Pulling latest images..."
         docker pull 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend:${IMAGE_TAG}
         docker pull 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend:${IMAGE_TAG}
         
-        echo Stopping and removing old containers...
+        echo "Stopping and removing old containers..."
         docker rm -f frontend || true
         docker rm -f backend || true
         
-        echo Starting new containers...
+        echo "Starting new containers..."
         docker run -d -p 8080:8080 --name frontend 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-frontend:${IMAGE_TAG}
         docker run -d -p 5000:5000 --name backend 890742562729.dkr.ecr.eu-north-1.amazonaws.com/production-backend:${IMAGE_TAG}
         EOF
       - chmod +x deploy.sh
-      - echo "Testing SSH connection first with simple command"
-      - ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH -v $EC2_USER@$EC2_IP "echo SSH connection successful"
-      - echo "Copying deployment script to EC2"
-      - scp -o StrictHostKeyChecking=no -i $SSH_KEY_PATH deploy.sh $EC2_USER@$EC2_IP:/home/$EC2_USER/deploy.sh
-      - echo "Running deployment script on EC2"
-      - ssh -o StrictHostKeyChecking=no -i $SSH_KEY_PATH $EC2_USER@$EC2_IP "chmod +x /home/$EC2_USER/deploy.sh && /home/$EC2_USER/deploy.sh"
+      
+      # Try SSH with explicitly specifying the key file
+      - echo "Testing SSH connection..."
+      - ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=$SSH_KEY_PATH $EC2_USER@$EC2_IP "echo SSH connection successful"
+      
+      # Only proceed with deployment if SSH test succeeded
+      - echo "Copying deployment script to EC2..."
+      - scp -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=$SSH_KEY_PATH deploy.sh $EC2_USER@$EC2_IP:/home/$EC2_USER/deploy.sh
+      - echo "Running deployment script on EC2..."
+      - ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityFile=$SSH_KEY_PATH $EC2_USER@$EC2_IP "chmod +x /home/$EC2_USER/deploy.sh && /home/$EC2_USER/deploy.sh"
 artifacts:
   files:
     - imagedefinitions.json
